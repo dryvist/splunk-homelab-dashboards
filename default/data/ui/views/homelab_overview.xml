@@ -1,0 +1,207 @@
+<dashboard version="2" theme="light">
+  <label>Homelab Overview</label>
+  <description>CPU, memory, load, network, GPU, and storage metrics by reported node, with cluster totals.</description>
+  <definition><![CDATA[
+{
+  "title": "Homelab Overview",
+  "description": "Node and cluster summaries built from metric data.",
+  "defaults": {
+    "dataSources": {
+      "ds.search": {
+        "options": {
+          "queryParameters": {
+            "earliest": "$time.earliest$",
+            "latest": "$time.latest$"
+          }
+        }
+      }
+    }
+  },
+  "inputs": {
+    "input_time": {
+      "type": "input.timerange",
+      "title": "Time range",
+      "options": {
+        "token": "time",
+        "defaultValue": "-24h@h,now"
+      }
+    },
+    "input_node": {
+      "type": "input.dropdown",
+      "title": "Node",
+      "options": {
+        "token": "node",
+        "defaultValue": "*",
+        "selectFirstSearchResult": false,
+        "searchWhenChanged": true,
+        "items": {
+          "dataSources": {
+            "primary": "ds_input_nodes"
+          }
+        }
+      }
+    }
+  },
+  "dataSources": {
+    "ds_input_nodes": {
+      "type": "ds.search",
+      "options": {
+        "query": "| mstats latest(node_cpu_seconds_total) AS sample WHERE index=host_metrics span=1h BY host | stats count BY host | eval label=host, value=host | append [| makeresults | eval label=\"All nodes\", value=\"*\"] | fields label value",
+        "queryParameters": {
+          "earliest": "-30d",
+          "latest": "now"
+        }
+      }
+    },
+    "ds_cluster_totals": {
+      "type": "ds.search",
+      "options": {
+        "query": "| mstats rate_sum(node_cpu_seconds_total) AS cpu_rate WHERE index=host_metrics span=5m BY mode | stats latest(cpu_rate) AS cpu_rate BY mode | stats sum(cpu_rate) AS total_cpu_rate sum(eval(if(mode=\"idle\",cpu_rate,0))) AS idle_cpu_rate | eval cpu_busy_cores=round(total_cpu_rate-idle_cpu_rate,2), cpu_total_cores=round(total_cpu_rate,2), cpu_used_pct=if(total_cpu_rate>0,round(100*(total_cpu_rate-idle_cpu_rate)/total_cpu_rate,1),null()) | fields cpu_busy_cores cpu_total_cores cpu_used_pct | appendcols [| mstats latest(node_memory_MemAvailable_bytes) AS available_bytes latest(node_memory_MemTotal_bytes) AS total_bytes WHERE index=host_metrics span=5m BY host | stats latest(available_bytes) AS available_bytes latest(total_bytes) AS total_bytes BY host | stats sum(available_bytes) AS memory_available_bytes sum(total_bytes) AS memory_total_bytes | eval memory_used_bytes=memory_total_bytes-memory_available_bytes, memory_used_pct=round(100*memory_used_bytes/memory_total_bytes,1) | fields memory_used_bytes memory_total_bytes memory_used_pct] | appendcols [| mstats latest(pve_zpool_alloc_bytes) AS used_bytes latest(pve_zpool_size_bytes) AS total_bytes WHERE index=host_metrics span=5m BY host pool | stats latest(used_bytes) AS used_bytes latest(total_bytes) AS total_bytes BY host pool | stats sum(used_bytes) AS used_bytes sum(total_bytes) AS storage_total_bytes | eval storage_free_bytes=storage_total_bytes-used_bytes, storage_used_pct=round(100*used_bytes/storage_total_bytes,1) | fields used_bytes storage_total_bytes storage_free_bytes storage_used_pct] | appendcols [| mstats rate_sum(node_network_receive_bytes_total) AS rx_bytes_per_second rate_sum(node_network_transmit_bytes_total) AS tx_bytes_per_second WHERE index=host_metrics span=5m BY host | stats latest(rx_bytes_per_second) AS rx_bytes_per_second latest(tx_bytes_per_second) AS tx_bytes_per_second BY host | stats sum(rx_bytes_per_second) AS rx_bytes_per_second sum(tx_bytes_per_second) AS tx_bytes_per_second | eval rx_mbps=round(rx_bytes_per_second*8/1000000,2), tx_mbps=round(tx_bytes_per_second*8/1000000,2) | fields rx_mbps tx_mbps] | appendcols [| mstats avg(node_gpu_utilization_gpu_percent_all) AS gpu_utilization_pct avg(node_gpu_memory_used_bytes_all) AS gpu_memory_used_bytes avg(node_gpu_memory_total_bytes_all) AS gpu_memory_total_bytes avg(node_gpu_power_draw_watts_all) AS gpu_power_watts WHERE index=os_metrics span=5m BY host | stats latest(gpu_utilization_pct) AS gpu_utilization_pct latest(gpu_memory_used_bytes) AS gpu_memory_used_bytes latest(gpu_memory_total_bytes) AS gpu_memory_total_bytes latest(gpu_power_watts) AS gpu_power_watts BY host | stats avg(gpu_utilization_pct) AS gpu_utilization_pct sum(gpu_memory_used_bytes) AS gpu_memory_used_bytes sum(gpu_memory_total_bytes) AS gpu_memory_total_bytes sum(gpu_power_watts) AS gpu_power_watts | eval gpu_memory_used_pct=if(gpu_memory_total_bytes>0,round(100*gpu_memory_used_bytes/gpu_memory_total_bytes,1),null()) | fields gpu_utilization_pct gpu_memory_used_bytes gpu_memory_total_bytes gpu_memory_used_pct gpu_power_watts] | table cpu_busy_cores cpu_total_cores cpu_used_pct memory_used_bytes memory_total_bytes memory_used_pct used_bytes storage_total_bytes storage_free_bytes storage_used_pct rx_mbps tx_mbps gpu_utilization_pct gpu_memory_used_bytes gpu_memory_total_bytes gpu_memory_used_pct gpu_power_watts",
+        "queryParameters": {
+          "earliest": "$time.earliest$",
+          "latest": "$time.latest$"
+        }
+      }
+    },
+    "ds_node_cpu": {
+      "type": "ds.search",
+      "options": {
+        "query": "| mstats rate_sum(node_cpu_seconds_total) AS cpu_rate WHERE index=host_metrics span=5m BY host mode | stats latest(cpu_rate) AS cpu_rate BY host mode | stats sum(cpu_rate) AS total_cpu_rate sum(eval(if(mode=\"idle\",cpu_rate,0))) AS idle_cpu_rate BY host | eval cpu_busy_cores=round(total_cpu_rate-idle_cpu_rate,2), cpu_used_pct=if(total_cpu_rate>0,round(100*(total_cpu_rate-idle_cpu_rate)/total_cpu_rate,1),null()) | search host=$node$ | table host cpu_used_pct cpu_busy_cores total_cpu_rate",
+        "queryParameters": {
+          "earliest": "$time.earliest$",
+          "latest": "$time.latest$"
+        }
+      }
+    },
+    "ds_node_memory": {
+      "type": "ds.search",
+      "options": {
+        "query": "| mstats latest(node_memory_MemAvailable_bytes) AS available_bytes latest(node_memory_MemTotal_bytes) AS total_bytes WHERE index=host_metrics span=5m BY host | stats latest(available_bytes) AS available_bytes latest(total_bytes) AS total_bytes BY host | eval used_bytes=total_bytes-available_bytes, memory_used_pct=round(100*used_bytes/total_bytes,1) | search host=$node$ | table host memory_used_pct used_bytes total_bytes available_bytes",
+        "queryParameters": {
+          "earliest": "$time.earliest$",
+          "latest": "$time.latest$"
+        }
+      }
+    },
+    "ds_node_load": {
+      "type": "ds.search",
+      "options": {
+        "query": "| mstats latest(node_load1) AS load1 WHERE index=host_metrics span=5m BY host | stats latest(load1) AS load1 BY host | search host=$node$ | table host load1",
+        "queryParameters": {
+          "earliest": "$time.earliest$",
+          "latest": "$time.latest$"
+        }
+      }
+    },
+    "ds_node_network": {
+      "type": "ds.search",
+      "options": {
+        "query": "| mstats rate_sum(node_network_receive_bytes_total) AS rx_bytes_per_second rate_sum(node_network_transmit_bytes_total) AS tx_bytes_per_second WHERE index=host_metrics span=5m BY host | stats latest(rx_bytes_per_second) AS rx_bytes_per_second latest(tx_bytes_per_second) AS tx_bytes_per_second BY host | eval rx_mbps=round(rx_bytes_per_second*8/1000000,2), tx_mbps=round(tx_bytes_per_second*8/1000000,2) | search host=$node$ | table host rx_mbps tx_mbps rx_bytes_per_second tx_bytes_per_second",
+        "queryParameters": {
+          "earliest": "$time.earliest$",
+          "latest": "$time.latest$"
+        }
+      }
+    },
+    "ds_node_gpu": {
+      "type": "ds.search",
+      "options": {
+        "query": "| mstats avg(node_gpu_utilization_gpu_percent_all) AS gpu_utilization_pct avg(node_gpu_memory_used_bytes_all) AS gpu_memory_used_bytes avg(node_gpu_memory_total_bytes_all) AS gpu_memory_total_bytes avg(node_gpu_power_draw_watts_all) AS gpu_power_watts max(node_gpu_temperature_celsius_all) AS gpu_temperature_celsius WHERE index=os_metrics span=5m BY host | stats latest(gpu_utilization_pct) AS gpu_utilization_pct latest(gpu_memory_used_bytes) AS gpu_memory_used_bytes latest(gpu_memory_total_bytes) AS gpu_memory_total_bytes latest(gpu_power_watts) AS gpu_power_watts latest(gpu_temperature_celsius) AS gpu_temperature_celsius BY host | eval gpu_memory_used_pct=if(gpu_memory_total_bytes>0,round(100*gpu_memory_used_bytes/gpu_memory_total_bytes,1),null()) | search host=$node$ | table host gpu_utilization_pct gpu_memory_used_pct gpu_memory_used_bytes gpu_memory_total_bytes gpu_power_watts gpu_temperature_celsius",
+        "queryParameters": {
+          "earliest": "$time.earliest$",
+          "latest": "$time.latest$"
+        }
+      }
+    },
+    "ds_node_pools": {
+      "type": "ds.search",
+      "options": {
+        "query": "| mstats latest(pve_zpool_cap_percent) AS fill_pct WHERE index=host_metrics span=5m BY host pool | stats latest(fill_pct) AS fill_pct BY host pool | search host=$node$ | eval fill_pct=round(fill_pct,1) | table host pool fill_pct",
+        "queryParameters": {
+          "earliest": "$time.earliest$",
+          "latest": "$time.latest$"
+        }
+      }
+    }
+  },
+  "visualizations": {
+    "viz_cluster_totals": {
+      "type": "splunk.table",
+      "title": "Cluster totals",
+      "description": "CPU busy cores, memory and storage bytes, network throughput, and GPU utilization, memory, and power.",
+      "dataSources": {
+        "primary": "ds_cluster_totals"
+      },
+      "options": {}
+    },
+    "viz_node_cpu": {
+      "type": "splunk.table",
+      "title": "CPU by node",
+      "dataSources": {
+        "primary": "ds_node_cpu"
+      },
+      "options": {}
+    },
+    "viz_node_memory": {
+      "type": "splunk.table",
+      "title": "Memory by node",
+      "dataSources": {
+        "primary": "ds_node_memory"
+      },
+      "options": {}
+    },
+    "viz_node_load": {
+      "type": "splunk.table",
+      "title": "Load by node",
+      "dataSources": {
+        "primary": "ds_node_load"
+      },
+      "options": {}
+    },
+    "viz_node_network": {
+      "type": "splunk.table",
+      "title": "Network throughput by node",
+      "dataSources": {
+        "primary": "ds_node_network"
+      },
+      "options": {}
+    },
+    "viz_node_gpu": {
+      "type": "splunk.table",
+      "title": "GPU by node",
+      "description": "GPU index is unresolved; searches all metric indexes for the named GPU series.",
+      "dataSources": {
+        "primary": "ds_node_gpu"
+      },
+      "options": {}
+    },
+    "viz_node_pools": {
+      "type": "splunk.table",
+      "title": "Pool fill by node",
+      "dataSources": {
+        "primary": "ds_node_pools"
+      },
+      "options": {}
+    }
+  },
+  "layout": {
+    "type": "grid",
+    "options": {
+      "width": 1440,
+      "height": 1240,
+      "display": "auto-scale"
+    },
+    "structure": [
+      {"item": "viz_cluster_totals", "type": "block", "position": {"x": 0, "y": 0, "w": 1440, "h": 280}},
+      {"item": "viz_node_cpu", "type": "block", "position": {"x": 0, "y": 280, "w": 480, "h": 300}},
+      {"item": "viz_node_memory", "type": "block", "position": {"x": 480, "y": 280, "w": 480, "h": 300}},
+      {"item": "viz_node_load", "type": "block", "position": {"x": 960, "y": 280, "w": 480, "h": 300}},
+      {"item": "viz_node_network", "type": "block", "position": {"x": 0, "y": 580, "w": 720, "h": 320}},
+      {"item": "viz_node_gpu", "type": "block", "position": {"x": 720, "y": 580, "w": 720, "h": 320}},
+      {"item": "viz_node_pools", "type": "block", "position": {"x": 0, "y": 900, "w": 1440, "h": 320}}
+    ],
+    "globalInputs": ["input_time", "input_node"]
+  }
+}
+  ]]></definition>
+</dashboard>

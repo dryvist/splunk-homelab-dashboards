@@ -1,0 +1,266 @@
+<dashboard version="2" theme="light">
+  <label>Storage Capacity and Health</label>
+  <description>Data-driven pool capacity, health, I/O, and SMART status.</description>
+  <definition><![CDATA[
+{
+  "title": "Storage Capacity and Health",
+  "description": "Storage metrics grouped by their reported host, pool, device, and disk dimensions.",
+  "defaults": {
+    "dataSources": {
+      "ds.search": {
+        "options": {
+          "queryParameters": {
+            "earliest": "$time.earliest$",
+            "latest": "$time.latest$"
+          }
+        }
+      }
+    }
+  },
+  "inputs": {
+    "input_time": {
+      "type": "input.timerange",
+      "title": "Time range",
+      "options": {
+        "token": "time",
+        "defaultValue": "-24h@h,now"
+      }
+    },
+    "input_node": {
+      "type": "input.dropdown",
+      "title": "Node",
+      "options": {
+        "token": "node",
+        "defaultValue": "*",
+        "selectFirstSearchResult": false,
+        "searchWhenChanged": true,
+        "items": {
+          "dataSources": {
+            "primary": "ds_input_nodes"
+          }
+        }
+      }
+    },
+    "input_pool": {
+      "type": "input.dropdown",
+      "title": "Pool",
+      "options": {
+        "token": "pool",
+        "defaultValue": "*",
+        "selectFirstSearchResult": false,
+        "searchWhenChanged": true,
+        "items": {
+          "dataSources": {
+            "primary": "ds_input_pools"
+          }
+        }
+      }
+    },
+    "input_device": {
+      "type": "input.dropdown",
+      "title": "SMART device",
+      "options": {
+        "token": "device",
+        "defaultValue": "*",
+        "selectFirstSearchResult": false,
+        "searchWhenChanged": true,
+        "items": {
+          "dataSources": {
+            "primary": "ds_input_devices"
+          }
+        }
+      }
+    }
+  },
+  "dataSources": {
+    "ds_input_nodes": {
+      "type": "ds.search",
+      "options": {
+        "query": "| mstats latest(pve_zpool_cap_percent) AS sample WHERE index=host_metrics span=1h BY host | stats count BY host | eval label=host, value=host | append [| makeresults | eval label=\"All nodes\", value=\"*\"] | fields label value",
+        "queryParameters": {
+          "earliest": "-30d",
+          "latest": "now"
+        }
+      }
+    },
+    "ds_input_pools": {
+      "type": "ds.search",
+      "options": {
+        "query": "| mstats latest(pve_zpool_cap_percent) AS sample WHERE index=host_metrics span=1h BY pool | stats count BY pool | eval label=pool, value=pool | append [| makeresults | eval label=\"All pools\", value=\"*\"] | fields label value",
+        "queryParameters": {
+          "earliest": "-30d",
+          "latest": "now"
+        }
+      }
+    },
+    "ds_input_devices": {
+      "type": "ds.search",
+      "options": {
+        "query": "| mstats latest(smartmon_device_smart_healthy) AS sample WHERE index=host_metrics span=1h BY disk type | eval drive=disk.\" \".type | stats count BY drive | eval label=drive, value=drive | append [| makeresults | eval label=\"All devices\", value=\"*\"] | fields label value",
+        "queryParameters": {
+          "earliest": "-30d",
+          "latest": "now"
+        }
+      }
+    },
+    "ds_pool_fill_bands": {
+      "type": "ds.search",
+      "options": {
+        "query": "| mstats latest(pve_zpool_cap_percent) AS fill_pct WHERE index=host_metrics span=5m BY host pool | stats latest(fill_pct) AS fill_pct BY host pool | search host=$node$ pool=$pool$ | eval pool_label=host.\" / \".pool | eval green_fill=if(fill_pct<70,fill_pct,null()), yellow_fill=if(fill_pct>=70 AND fill_pct<80,fill_pct,null()), orange_fill=if(fill_pct>=80 AND fill_pct<90,fill_pct,null()), red_fill=if(fill_pct>=90,fill_pct,null()) | table pool_label green_fill yellow_fill orange_fill red_fill",
+        "queryParameters": {
+          "earliest": "$time.earliest$",
+          "latest": "$time.latest$"
+        }
+      }
+    },
+    "ds_pool_capacity": {
+      "type": "ds.search",
+      "options": {
+        "query": "| mstats latest(pve_zpool_cap_percent) AS fill_pct latest(pve_zpool_size_bytes) AS size_bytes latest(pve_zpool_alloc_bytes) AS used_bytes latest(pve_zpool_free_bytes) AS free_bytes WHERE index=host_metrics span=5m BY host pool | stats latest(fill_pct) AS fill_pct latest(size_bytes) AS size_bytes latest(used_bytes) AS used_bytes latest(free_bytes) AS free_bytes BY host pool | search host=$node$ pool=$pool$ | eval size_gib=round(size_bytes/1073741824,2), used_gib=round(used_bytes/1073741824,2), free_gib=round(free_bytes/1073741824,2), fill_pct=round(fill_pct,1) | table host pool fill_pct size_gib used_gib free_gib",
+        "queryParameters": {
+          "earliest": "$time.earliest$",
+          "latest": "$time.latest$"
+        }
+      }
+    },
+    "ds_days_to_full": {
+      "type": "ds.search",
+      "options": {
+        "query": "| mstats latest(pve_zpool_free_bytes) AS free_bytes WHERE index=host_metrics span=1d BY host pool | eval sample_time=_time | eventstats avg(sample_time) AS mean_time avg(free_bytes) AS mean_free BY host pool | eval covariance=(sample_time-mean_time)*(free_bytes-mean_free), variance=(sample_time-mean_time)^2 | stats sum(covariance) AS covariance sum(variance) AS variance latest(free_bytes) AS current_free BY host pool | eval slope_bytes_per_second=if(variance>0,covariance/variance,null()) | eval days_to_full=if(slope_bytes_per_second<0,round(current_free/(-slope_bytes_per_second)/86400,1),null()) | search host=$node$ pool=$pool$ | table host pool current_free slope_bytes_per_second days_to_full",
+        "queryParameters": {
+          "earliest": "-7d@d",
+          "latest": "now"
+        }
+      }
+    },
+    "ds_pool_health": {
+      "type": "ds.search",
+      "options": {
+        "query": "| mstats latest(pve_zpool_health) AS health WHERE index=host_metrics span=5m BY host pool state | stats latest(health) AS health BY host pool state | where health=1 | search host=$node$ pool=$pool$ | table host pool state",
+        "queryParameters": {
+          "earliest": "$time.earliest$",
+          "latest": "$time.latest$"
+        }
+      }
+    },
+    "ds_pool_scrub": {
+      "type": "ds.search",
+      "options": {
+        "query": "| mstats latest(pve_zpool_scan_errors) AS scan_errors latest(pve_zpool_scan_end_time_seconds) AS scan_end_time_seconds WHERE index=host_metrics span=5m BY host pool | stats latest(scan_errors) AS scan_errors latest(scan_end_time_seconds) AS scan_end_time_seconds BY host pool | search host=$node$ pool=$pool$ | eval last_scan=if(scan_end_time_seconds>0,strftime(scan_end_time_seconds,\"%Y-%m-%d %H:%M:%S\"),\"never\") | table host pool scan_errors last_scan",
+        "queryParameters": {
+          "earliest": "$time.earliest$",
+          "latest": "$time.latest$"
+        }
+      }
+    },
+    "ds_pool_io": {
+      "type": "ds.search",
+      "options": {
+        "query": "| mstats avg(pve_zpool_read_bytes) AS read_bytes_per_second avg(pve_zpool_write_bytes) AS write_bytes_per_second WHERE index=host_metrics span=5m BY host pool | search host=$node$ pool=$pool$",
+        "queryParameters": {
+          "earliest": "$time.earliest$",
+          "latest": "$time.latest$"
+        }
+      }
+    },
+    "ds_smart": {
+      "type": "ds.search",
+      "options": {
+        "query": "| mstats latest(smartmon_device_smart_healthy) AS smart_healthy latest(smartmon_current_pending_sector_raw_value) AS pending_sectors latest(smartmon_reallocated_sector_ct_raw_value) AS reallocated_sectors latest(smartmon_power_on_hours_raw_value) AS power_on_hours latest(smartmon_temperature_celsius_raw_value) AS temperature_celsius WHERE index=host_metrics span=5m BY host disk type | stats latest(smart_healthy) AS smart_healthy latest(pending_sectors) AS pending_sectors latest(reallocated_sectors) AS reallocated_sectors latest(power_on_hours) AS power_on_hours latest(temperature_celsius) AS temperature_celsius BY host disk type | eval smart_status=case(smart_healthy=1,\"PASSED\",smart_healthy=0,\"FAILED\",true(),\"UNKNOWN\") | eval drive=disk.\" \".type | search host=$node$ drive=$device|s$ | table host drive smart_status pending_sectors reallocated_sectors power_on_hours temperature_celsius",
+        "queryParameters": {
+          "earliest": "$time.earliest$",
+          "latest": "$time.latest$"
+        }
+      }
+    }
+  },
+  "visualizations": {
+    "viz_pool_fill": {
+      "type": "splunk.bar",
+      "title": "Pool fill by node and pool",
+      "description": "Green below 70%; yellow 70 to below 80%; orange 80 to below 90%; red 90% and above.",
+      "dataSources": {
+        "primary": "ds_pool_fill_bands"
+      },
+      "options": {
+        "stackMode": "stacked",
+        "seriesColors": ["#2E7D32", "#F9A825", "#EF6C00", "#C62828"],
+        "legendDisplay": "off",
+        "xAxisTitle": "Node / pool",
+        "yAxisTitle": "Capacity (%)"
+      }
+    },
+    "viz_pool_capacity": {
+      "type": "splunk.table",
+      "title": "Pool size, used, and free",
+      "dataSources": {
+        "primary": "ds_pool_capacity"
+      },
+      "options": {}
+    },
+    "viz_days_to_full": {
+      "type": "splunk.table",
+      "title": "Estimated days to full from seven-day free-space trend",
+      "dataSources": {
+        "primary": "ds_days_to_full"
+      },
+      "options": {}
+    },
+    "viz_pool_health": {
+      "type": "splunk.table",
+      "title": "Current pool health state",
+      "dataSources": {
+        "primary": "ds_pool_health"
+      },
+      "options": {}
+    },
+    "viz_pool_scrub": {
+      "type": "splunk.table",
+      "title": "Last scan errors and scan time",
+      "dataSources": {
+        "primary": "ds_pool_scrub"
+      },
+      "options": {}
+    },
+    "viz_pool_io": {
+      "type": "splunk.line",
+      "title": "Pool read and write throughput",
+      "dataSources": {
+        "primary": "ds_pool_io"
+      },
+      "options": {
+        "legendDisplay": "bottom",
+        "xAxisTitle": "Time",
+        "yAxisTitle": "Bytes per second"
+      }
+    },
+    "viz_smart": {
+      "type": "splunk.table",
+      "title": "SMART health by node and device",
+      "dataSources": {
+        "primary": "ds_smart"
+      },
+      "options": {}
+    }
+  },
+  "layout": {
+    "type": "grid",
+    "options": {
+      "width": 1440,
+      "height": 1240,
+      "display": "auto-scale"
+    },
+    "structure": [
+      {"item": "viz_pool_fill", "type": "block", "position": {"x": 0, "y": 0, "w": 720, "h": 280}},
+      {"item": "viz_pool_capacity", "type": "block", "position": {"x": 720, "y": 0, "w": 720, "h": 280}},
+      {"item": "viz_days_to_full", "type": "block", "position": {"x": 0, "y": 280, "w": 720, "h": 300}},
+      {"item": "viz_pool_health", "type": "block", "position": {"x": 720, "y": 280, "w": 720, "h": 300}},
+      {"item": "viz_pool_io", "type": "block", "position": {"x": 0, "y": 580, "w": 720, "h": 300}},
+      {"item": "viz_pool_scrub", "type": "block", "position": {"x": 720, "y": 580, "w": 720, "h": 300}},
+      {"item": "viz_smart", "type": "block", "position": {"x": 0, "y": 880, "w": 1440, "h": 360}}
+    ],
+    "globalInputs": ["input_time", "input_node", "input_pool", "input_device"]
+  }
+}
+  ]]></definition>
+</dashboard>
