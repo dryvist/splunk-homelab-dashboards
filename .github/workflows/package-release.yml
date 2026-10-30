@@ -1,0 +1,44 @@
+# Packages this Splunk app as splunk-homelab-dashboards.tar and attaches it to the
+# release named by `tag`, so ansible-splunk's addons.yml github_repo entry has a
+# fixed asset name to download regardless of tag.
+#
+# Called from release.yml. release-please creates the release as a draft,
+# and this attaches the tarball before the caller publishes it: a published
+# GitHub release is immutable and accepts no new assets.
+
+name: Package Release
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Tag of the draft release to attach the tarball to.
+        type: string
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Tar the app directory
+        run: |
+          # Write outside the tree being archived: tar refuses to add an archive
+          # to itself.
+          tar --exclude='.git' --exclude='.github' \
+            -cf "${RUNNER_TEMP}/splunk-homelab-dashboards.tar" \
+            --transform 's,^\.,splunk-homelab-dashboards,' .
+
+      - name: Upload to draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ inputs.tag }}
+        run: |
+          # --clobber keeps a re-run after a partial failure idempotent; it only
+          # touches draft releases, since published ones are immutable.
+          gh release upload "${TAG_NAME}" "${RUNNER_TEMP}/splunk-homelab-dashboards.tar" --clobber

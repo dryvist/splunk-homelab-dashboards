@@ -1,0 +1,4 @@
+<nav>
+  <view name="homelab_overview" default="true" />
+  <view name="storage_capacity_health" />
+</nav>

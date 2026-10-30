@@ -1,0 +1,52 @@
+# CI Gate — thin wrapper over the org reusable gate.
+#
+# The shared gate checks repository formatting and security; this workflow also
+# runs the app's local contract tests.
+
+name: CI Gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  tests:
+    name: App Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Validate dashboard views
+        run: |
+          python3 -m unittest discover -s tests -p 'test_*.py'
+
+  gate:
+    name: Merge Gate
+    permissions:
+      contents: read
+      pull-requests: read
+      # The org gate's queue watchdog cancels stuck sibling jobs via the
+      # Actions API; a called workflow can never exceed the caller's grant, so
+      # actions: write must be granted here or the run fails at graph
+      # validation (startup_failure).
+      actions: write
+    uses: JacobPEvans/.github/.github/workflows/_ci-gate.yml@v1
+    with:
+      profile: docs
+      python_security: true
+      filters: |
+        markdown:
+          - '**.md'
+          - '.markdownlint*'
+        python:
+          - 'tests/**.py'
