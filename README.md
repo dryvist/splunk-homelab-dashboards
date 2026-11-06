@@ -1,12 +1,15 @@
 # splunk-homelab-dashboards
 
-A Splunk app with two Dashboard Studio views over homelab metrics.
+A Splunk app with Dashboard Studio views over homelab metrics and agent logs.
 
 - **Storage Capacity and Health** (`storage_capacity_health`): pool fill against
   thresholds, size, used and free, days to full, pool health and scrub results,
   pool I/O, and SMART status per node and device.
 - **Homelab Overview** (`homelab_overview`): cluster totals, then CPU, memory,
   load, network, GPU and pool fill per node.
+- **Agent Activity (Beta)** (`agent_activity`): event counts by agent index and
+  sourcetype, cron terminal events and outcomes, errors, and available gateway,
+  retain, and recall timings from the `hermes` and `hindsight` indexes.
 
 The views contain no hostnames, addresses, serial numbers or pool layouts.
 Selectors are populated from the metrics.
@@ -21,6 +24,12 @@ to below 90%, red at 90% and above.
 
 Days to full is a linear regression over daily free-byte samples from the last
 seven days. It shows no value when free space is not shrinking.
+
+Agent Activity uses extracted log fields and JSON extraction. Cron counts assume
+one terminal event per run. Timing panels accept only fields with explicit
+millisecond or second units and show sample counts; empty panels indicate no
+matching measurements. Event names, field mappings, and units need live
+validation. Error panels require extracted severity or outcome fields.
 
 ## Data
 
