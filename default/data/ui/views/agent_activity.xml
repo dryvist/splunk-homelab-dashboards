@@ -1,0 +1,158 @@
+<dashboard version="2" theme="light">
+  <label>Agent Activity (Beta)</label>
+  <description>Agent log activity, cron outcomes, errors, and available timings. Field assumptions require live validation.</description>
+  <definition><![CDATA[
+{
+  "title": "Agent Activity (Beta)",
+  "description": "Events from the hermes and hindsight indexes. Empty timing panels mean no matching measurements; field mappings are unverified.",
+  "defaults": {
+    "dataSources": {
+      "ds.search": {
+        "options": {
+          "queryParameters": {
+            "earliest": "$time.earliest$",
+            "latest": "$time.latest$"
+          }
+        }
+      }
+    }
+  },
+  "inputs": {
+    "input_time": {
+      "type": "input.timerange",
+      "title": "Time range",
+      "options": {
+        "token": "time",
+        "defaultValue": "-24h@h,now"
+      }
+    }
+  },
+  "dataSources": {
+    "ds_events": {
+      "type": "ds.search",
+      "options": {
+        "query": "(index=hermes OR index=hindsight) | eval agent_sourcetype=index.\" / \".sourcetype | timechart span=5m cont=f limit=0 useother=f count AS events BY agent_sourcetype"
+      }
+    },
+    "ds_sources": {
+      "type": "ds.search",
+      "options": {
+        "query": "(index=hermes OR index=hindsight) | stats count AS events BY index sourcetype source | sort - events"
+      }
+    },
+    "ds_cron_runs": {
+      "type": "ds.search",
+      "options": {
+        "query": "index=hermes | spath | eval cron_event=lower(coalesce(event,event_type,action,\"\")) | where in(cron_event,\"cron_run_completed\",\"cron_run_finished\",\"cron_run_failed\") | timechart span=5m cont=f limit=0 useother=f count AS terminal_events BY sourcetype"
+      }
+    },
+    "ds_cron_outcomes": {
+      "type": "ds.search",
+      "options": {
+        "query": "index=hermes | spath | eval cron_event=lower(coalesce(event,event_type,action,\"\")) | where in(cron_event,\"cron_run_completed\",\"cron_run_finished\",\"cron_run_failed\") | eval outcome=lower(coalesce(outcome,status,result,if(cron_event=\"cron_run_failed\",\"failed\",\"unreported\"))), run_identifier=coalesce(run_id,job_run_id) | stats count AS terminal_events count(run_identifier) AS events_with_run_id dc(run_identifier) AS identified_runs BY sourcetype source outcome | eval identified_runs=if(events_with_run_id>0,identified_runs,null()) | sort - terminal_events"
+      }
+    },
+    "ds_errors": {
+      "type": "ds.search",
+      "options": {
+        "query": "(index=hermes OR index=hindsight) | spath | eval event_level=lower(coalesce(level,log_level,severity,\"\")), event_status=lower(coalesce(status,outcome,\"\")) | where in(event_level,\"error\",\"critical\",\"fatal\") OR in(event_status,\"error\",\"failed\",\"failure\") | eval agent_sourcetype=index.\" / \".sourcetype | timechart span=5m cont=f limit=0 useother=f count AS error_events BY agent_sourcetype"
+      }
+    },
+    "ds_top_errors": {
+      "type": "ds.search",
+      "options": {
+        "query": "(index=hermes OR index=hindsight) | spath | eval event_level=lower(coalesce(level,log_level,severity,\"\")), event_status=lower(coalesce(status,outcome,\"\")) | where in(event_level,\"error\",\"critical\",\"fatal\") OR in(event_status,\"error\",\"failed\",\"failure\") | eval error_text=coalesce(error_message,message,msg,_raw) | stats count AS error_events BY index sourcetype source error_text | sort 10 - error_events"
+      }
+    },
+    "ds_gateway_latency": {
+      "type": "ds.search",
+      "options": {
+        "query": "index=hermes | spath | eval operation_name=lower(coalesce(operation,action,event,event_type,\"\")), component_name=lower(coalesce(component,logger,service_name,\"\")) | where in(operation_name,\"gateway_request\",\"gateway_request_completed\",\"gateway_request_finished\") OR (in(component_name,\"gateway\",\"hermes_gateway\") AND in(operation_name,\"request\",\"request_completed\",\"request_finished\")) | eval timing_ms=coalesce(tonumber(duration_ms),tonumber(latency_ms),tonumber(elapsed_ms),1000*tonumber(duration_seconds),1000*tonumber(latency_seconds),1000*tonumber(elapsed_seconds)) | where isnotnull(timing_ms) AND timing_ms>=0 | stats count AS timed_events avg(timing_ms) AS mean_ms perc95(timing_ms) AS p95_ms BY sourcetype source"
+      }
+    },
+    "ds_memory_timings": {
+      "type": "ds.search",
+      "options": {
+        "query": "index=hindsight | spath | eval operation_name=lower(coalesce(operation,action,event,event_type,\"\")) | where in(operation_name,\"retain\",\"recall\") | eval timing_ms=coalesce(tonumber(duration_ms),tonumber(latency_ms),tonumber(elapsed_ms),1000*tonumber(duration_seconds),1000*tonumber(latency_seconds),1000*tonumber(elapsed_seconds)) | where isnotnull(timing_ms) AND timing_ms>=0 | stats count AS timed_events avg(timing_ms) AS mean_ms perc95(timing_ms) AS p95_ms BY sourcetype source operation_name"
+      }
+    }
+  },
+  "visualizations": {
+    "viz_events": {
+      "type": "splunk.line",
+      "title": "Events over time by agent index and sourcetype",
+      "dataSources": {"primary": "ds_events"},
+      "options": {}
+    },
+    "viz_sources": {
+      "type": "splunk.table",
+      "title": "Event sources",
+      "description": "Counts log events, not agent turns or requests.",
+      "dataSources": {"primary": "ds_sources"},
+      "options": {}
+    },
+    "viz_cron_runs": {
+      "type": "splunk.line",
+      "title": "Cron runs: terminal events over time",
+      "description": "Assumes one terminal event per run; duplicates count again. Event names need live validation.",
+      "dataSources": {"primary": "ds_cron_runs"},
+      "options": {}
+    },
+    "viz_cron_outcomes": {
+      "type": "splunk.table",
+      "title": "Cron outcomes and identified runs",
+      "description": "Distinct run identifiers per source and outcome when present; finished events without an outcome remain unreported.",
+      "dataSources": {"primary": "ds_cron_outcomes"},
+      "options": {}
+    },
+    "viz_errors": {
+      "type": "splunk.line",
+      "title": "Error events over time",
+      "description": "Extracted error, critical, or fatal levels and error, failed, or failure statuses only.",
+      "dataSources": {"primary": "ds_errors"},
+      "options": {}
+    },
+    "viz_top_errors": {
+      "type": "splunk.table",
+      "title": "Top error messages",
+      "description": "Up to 10 exact messages by source; falls back to the raw event when message fields are absent.",
+      "dataSources": {"primary": "ds_top_errors"},
+      "options": {}
+    },
+    "viz_gateway_latency": {
+      "type": "splunk.table",
+      "title": "Gateway request timings (ms, if present)",
+      "description": "Measured events only, with sample count. Empty means no matching timings; units and request markers need validation.",
+      "dataSources": {"primary": "ds_gateway_latency"},
+      "options": {}
+    },
+    "viz_memory_timings": {
+      "type": "splunk.table",
+      "title": "Retain and recall timings (ms, if present)",
+      "description": "Measured events only, with sample count. Empty means no matching timings; units and operation markers need validation.",
+      "dataSources": {"primary": "ds_memory_timings"},
+      "options": {}
+    }
+  },
+  "layout": {
+    "type": "grid",
+    "options": {
+      "width": 1440,
+      "height": 1240,
+      "display": "auto-scale"
+    },
+    "structure": [
+      {"item": "viz_events", "type": "block", "position": {"x": 0, "y": 0, "w": 720, "h": 300}},
+      {"item": "viz_sources", "type": "block", "position": {"x": 720, "y": 0, "w": 720, "h": 300}},
+      {"item": "viz_cron_runs", "type": "block", "position": {"x": 0, "y": 300, "w": 720, "h": 300}},
+      {"item": "viz_cron_outcomes", "type": "block", "position": {"x": 720, "y": 300, "w": 720, "h": 300}},
+      {"item": "viz_errors", "type": "block", "position": {"x": 0, "y": 600, "w": 720, "h": 320}},
+      {"item": "viz_top_errors", "type": "block", "position": {"x": 720, "y": 600, "w": 720, "h": 320}},
+      {"item": "viz_gateway_latency", "type": "block", "position": {"x": 0, "y": 920, "w": 720, "h": 320}},
+      {"item": "viz_memory_timings", "type": "block", "position": {"x": 720, "y": 920, "w": 720, "h": 320}}
+    ],
+    "globalInputs": ["input_time"]
+  }
+}
+  ]]></definition>
+</dashboard>
