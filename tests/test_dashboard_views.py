@@ -13,7 +13,13 @@ class DashboardViewsTest(unittest.TestCase):
         view_files = sorted(VIEWS.glob("*.xml"))
         self.assertEqual(
             {path.stem for path in view_files},
-            {"homelab_overview", "storage_capacity_health", "agent_activity"},
+            {
+                "homelab_overview",
+                "storage_capacity_health",
+                "agent_activity",
+                "agent_timeline",
+                "agent_network",
+            },
         )
 
         for path in view_files:
@@ -40,7 +46,13 @@ class DashboardViewsTest(unittest.TestCase):
         nav = ET.parse(ROOT / "default/data/ui/nav/default.xml").getroot()
         self.assertEqual(
             {view.get("name") for view in nav.findall("view")},
-            {"homelab_overview", "storage_capacity_health", "agent_activity"},
+            {
+                "homelab_overview",
+                "storage_capacity_health",
+                "agent_activity",
+                "agent_timeline",
+                "agent_network",
+            },
         )
 
     def test_agent_activity_uses_bounded_event_searches_and_global_time(self):
