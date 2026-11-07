@@ -1,0 +1,66 @@
+<dashboard version="2" theme="light">
+  <label>Agent timeline (Beta)</label>
+  <description>Systemd lifecycle intervals and measured model calls. Requires Splunk 10.2 or later.</description>
+  <definition><![CDATA[
+{
+  "title": "Agent timeline (Beta)",
+  "description": "Systemd starts paired with terminal messages, plus model calls measured by latency. Running means no terminal observed within the selected range.",
+  "defaults": {
+    "dataSources": {
+      "ds.search": {
+        "options": {
+          "queryParameters": {"earliest": "$time.earliest$", "latest": "$time.latest$"}
+        }
+      }
+    }
+  },
+  "inputs": {
+    "input_time": {
+      "type": "input.timerange",
+      "title": "Time range",
+      "options": {"token": "time", "defaultValue": "-4h,now"}
+    }
+  },
+  "dataSources": {
+    "ds_events": {
+      "type": "ds.search",
+      "options": {
+        "query": "index=hermes sourcetype=hermes:agent | spath | rex field=message \"^(?<lifecycle>Starting|Finished|Failed to start|Failed|Deactivated|Stopped)\\s+(?<unit>[A-Za-z0-9_.@:\\\\-]+\\.service)(?:\\s|:|$)\" | rex field=message \"^(?<result_unit>[A-Za-z0-9_.@:\\\\-]+\\.service):\\s+(?<result_state>Failed|Deactivated)\\b\" | rex field=latency \"^(?<latency_value>[0-9]+(?:\\.[0-9]+)?)(?<latency_unit>ms|s)$\" | eval unit=coalesce(unit,result_unit), lifecycle=coalesce(lifecycle,result_state), call_ms=if(isnotnull(model),tonumber(latency_value)*if(latency_unit=\"s\",1000,1),null()), host_key=coalesce(host,\"\"), procid_key=coalesce(procid,\"\") | where isnotnull(unit) OR isnotnull(call_ms) | addinfo | fields _time _indextime _cd unit lifecycle host_key procid_key model call_ms info_max_time"
+      }
+    },
+    "ds_intervals": {
+      "type": "ds.chain",
+      "options": {
+        "extend": "ds_events",
+        "query": "| eval unit=coalesce(unit,\"\"), lifecycle_order=if(lifecycle=\"Starting\",0,1) | sort 50000 - _time - lifecycle_order - _indextime - _cd | streamstats window=10000 global=f current=f last(lifecycle) AS next_state last(_time) AS next_time BY host_key procid_key unit | eval range_end=min(now(),info_max_time) | where (unit!=\"\" AND lifecycle=\"Starting\" AND (isnull(next_state) OR next_state!=\"Starting\")) OR (unit=\"\" AND isnotnull(call_ms)) | eval lane=if(unit=\"\",\"model calls\",unit), category=case(unit=\"\",\"model: \".model,isnull(next_state),\"running\",match(next_state,\"^Failed\"),\"failed\",next_state=\"Deactivated\",\"deactivated\",next_state=\"Stopped\",\"stopped\",true(),\"finished\"), interval_ms=if(unit=\"\",call_ms,1000*(coalesce(next_time,range_end)-_time)), timing_basis=case(unit=\"\",\"measured latency\",isnull(next_state),\"open: no terminal observed\",true(),\"paired systemd messages\"), _time=if(unit=\"\",1000*_time-call_ms,1000*_time) | where isnotnull(interval_ms) AND interval_ms>=0 | table _time lane interval_ms category timing_basis"
+      }
+    }
+  },
+  "visualizations": {
+    "viz_timeline": {
+      "type": "splunk.timeline",
+      "title": "Systemd units and model calls",
+      "description": "Units pair within available host/process identity. Repeated starts use the latest start. Running extends to the earlier of now or range end; it means no terminal observed. Model calls end at event time. Search keeps the latest 50,000 matching events; at most 10,000 intervals rendered.",
+      "dataSources": {"primary": "ds_intervals"},
+      "options": {
+        "x": "> primary | seriesByName('_time')",
+        "y": "> primary | seriesByName('lane')",
+        "duration": "> primary | seriesByName('interval_ms')",
+        "category": "> primary | seriesByName('category')",
+        "additionalTooltipFields": ["timing_basis"],
+        "legendDisplay": "right",
+        "resultLimit": 10000
+      }
+    }
+  },
+  "layout": {
+    "type": "grid",
+    "options": {"width": 1440, "height": 720, "display": "auto-scale"},
+    "structure": [
+      {"item": "viz_timeline", "type": "block", "position": {"x": 0, "y": 0, "w": 1440, "h": 720}}
+    ],
+    "globalInputs": ["input_time"]
+  }
+}
+  ]]></definition>
+</dashboard>

@@ -1,0 +1,96 @@
+<dashboard version="2" theme="light">
+  <label>Agent network (Beta)</label>
+  <description>Event relationships between agents, tools or models, and backends. Requires Splunk 10.4 or later.</description>
+  <definition><![CDATA[
+{
+  "title": "Agent network (Beta)",
+  "description": "Relationships reported together in agent events; counts are log events, not requests. No inferred backend or missing relationship is added.",
+  "defaults": {
+    "dataSources": {
+      "ds.search": {
+        "options": {
+          "queryParameters": {"earliest": "$time.earliest$", "latest": "$time.latest$"}
+        }
+      }
+    }
+  },
+  "inputs": {
+    "input_time": {
+      "type": "input.timerange",
+      "title": "Time range",
+      "options": {"token": "time", "defaultValue": "-4h,now"}
+    }
+  },
+  "dataSources": {
+    "ds_relationships": {
+      "type": "ds.search",
+      "options": {
+        "query": "(index=hermes sourcetype=hermes:agent) OR (index=hindsight sourcetype=hindsight:app) | spath | eval plugin=trim(coalesce(plugin,\"\")), model=trim(coalesce(model,\"\")), provider=trim(coalesce(provider,\"\")), bank=trim(coalesce(bank,\"\")), store=trim(coalesce(store,\"\")), relation=case(index=\"hermes\" AND len(plugin)>0 AND isnotnull(decision),\"plugin\",index=\"hermes\" AND len(model)>0 AND match(latency,\"^[0-9]+(?:\\.[0-9]+)?(?:ms|s)$\"),\"model\",index=\"hindsight\" AND len(bank)>0 AND match(store,\"^(?:[A-Za-z][A-Za-z0-9_.:-]*|[0-9]+(?:\\.[0-9]+)?(?:ms|s))$\"),\"store\") | where isnotnull(relation) | eval origin=if(relation=\"store\",\"bank: hindsight / \".bank,\"hermes\"), middle=case(relation=\"plugin\",\"plugin: \".plugin,relation=\"model\",\"model: \".model,relation=\"store\",\"store: \".if(match(store,\"^[0-9]\"),\"hindsight\",store)), destination=if(relation=\"model\" AND len(provider)>0,\"provider: \".provider,\"\"), deny_event=if(relation=\"plugin\" AND decision=\"deny\",1,0) | stats count AS events sum(deny_event) AS denies BY origin middle destination"
+      }
+    },
+    "ds_edges": {
+      "type": "ds.chain",
+      "options": {
+        "extend": "ds_relationships",
+        "query": "| eval hop=split(\"0,1\",\",\") | mvexpand hop | eval source=if(hop=\"0\",origin,middle), target=if(hop=\"0\",middle,destination), denies=if(hop=\"0\",denies,0) | where len(target)>0 | stats sum(events) AS events sum(denies) AS deny_count BY source target | sort 0 - events source target"
+      }
+    },
+    "ds_nodes": {
+      "type": "ds.chain",
+      "options": {
+        "extend": "ds_relationships",
+        "query": "| eval node=mvdedup(mvappend(origin,middle,if(len(destination)>0,destination,null()))) | mvexpand node | stats sum(events) AS events BY node | sort 0 - events node"
+      }
+    }
+  },
+  "visualizations": {
+    "viz_network": {
+      "type": "splunk.networkGraph",
+      "title": "Plugin decisions, model calls, and memory retrievals",
+      "description": "Arrow width scales with decisions, calls, or bank/store events; node diameter scales with events touching the node. Counts and plugin denies appear in the table below. Store timing strings map to the store role. At most 1,000 edges rendered.",
+      "dataSources": {"primary": "ds_edges", "nodeSource": "ds_nodes"},
+      "context": {
+        "nodeScale": {"outputMin": 16, "outputMax": 96},
+        "edgeScale": {"outputMin": 1, "outputMax": 12}
+      },
+      "options": {
+        "source": "> primary | seriesByName('source')",
+        "target": "> primary | seriesByName('target')",
+        "nodeIds": "> nodeSource | seriesByName('node')",
+        "nodeTexts": "> nodeSource | seriesByName('node')",
+        "nodeValues": "> nodeSource | seriesByName('events')",
+        "nodeSize": "> nodeSource | seriesByName('events') | lerp(nodeScale)",
+        "linkWidth": "> primary | seriesByName('events') | lerp(edgeScale)",
+        "layout": "hierarchical",
+        "hierarchyDirection": "leftRight",
+        "showDirection": "oneWay",
+        "resultLimit": 1000
+      }
+    },
+    "viz_edges": {
+      "type": "splunk.table",
+      "title": "Edge weights and deny counts over selected range",
+      "dataSources": {"primary": "ds_edges"},
+      "options": {}
+    },
+    "viz_nodes": {
+      "type": "splunk.table",
+      "title": "Node sizes: event count over selected range",
+      "description": "Each qualifying event counts once per participating node, before hop expansion.",
+      "dataSources": {"primary": "ds_nodes"},
+      "options": {}
+    }
+  },
+  "layout": {
+    "type": "grid",
+    "options": {"width": 1440, "height": 1040, "display": "auto-scale"},
+    "structure": [
+      {"item": "viz_network", "type": "block", "position": {"x": 0, "y": 0, "w": 1440, "h": 680}},
+      {"item": "viz_edges", "type": "block", "position": {"x": 0, "y": 680, "w": 720, "h": 360}},
+      {"item": "viz_nodes", "type": "block", "position": {"x": 720, "y": 680, "w": 720, "h": 360}}
+    ],
+    "globalInputs": ["input_time"]
+  }
+}
+  ]]></definition>
+</dashboard>
